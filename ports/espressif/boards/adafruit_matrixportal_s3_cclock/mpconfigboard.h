@@ -40,3 +40,6 @@
 #define DEFAULT_UART_BUS_TX (&pin_GPIO18)
 
 #define DOUBLE_TAP_PIN (&pin_GPIO1)
+
+// Customizations for the Climate Clock.
+#define CIRCUITPY_PYSTACK_SIZE 2048
