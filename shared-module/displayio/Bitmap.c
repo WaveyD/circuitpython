@@ -39,6 +39,8 @@ static int stride(uint32_t width, uint32_t bits_per_value) {
     return (row_width + ALIGN_BITS - 1) / ALIGN_BITS;
 }
 
+#define min(a, b) (((a) < (b)) ? (a) : (b))
+#define max(a, b) (((a) > (b)) ? (a) : (b))
 void common_hal_displayio_bitmap_construct(displayio_bitmap_t *self, uint32_t width,
     uint32_t height, uint32_t bits_per_value) {
     common_hal_displayio_bitmap_construct_from_buffer(self, width, height, bits_per_value, NULL, false);
@@ -174,8 +176,11 @@ void displayio_bitmap_write_pixel(displayio_bitmap_t *self, int16_t x, int16_t y
     }
 }
 
-void common_hal_displayio_bitmap_blit(displayio_bitmap_t *self, int16_t x, int16_t y, displayio_bitmap_t *source,
-    int16_t x1, int16_t y1, int16_t x2, int16_t y2, uint32_t skip_index, bool skip_index_none) {
+void common_hal_displayio_bitmap_blit(
+    displayio_bitmap_t *self, int16_t x, int16_t y, displayio_bitmap_t *source,
+    int16_t x1, int16_t y1, int16_t x2, int16_t y2,
+    bool use_skip_index, uint32_t skip_index,
+    bool use_dest_value, uint32_t dest_value) {
     if (self->read_only) {
         mp_raise_RuntimeError(translate("Read-only"));
     }
@@ -222,9 +227,9 @@ void common_hal_displayio_bitmap_blit(displayio_bitmap_t *self, int16_t x, int16
 
                 if ((yd_index >= 0) && (yd_index < self->height)) {
                     uint32_t value = common_hal_displayio_bitmap_get_pixel(source, xs_index, ys_index);
-                    if ((skip_index_none) || (value != skip_index)) {   // write if skip_value_none is True
+                    if (use_skip_index && value == skip_index) continue;
+                    if (use_dest_value && value != 0) value = dest_value;
                         displayio_bitmap_write_pixel(self, xd_index, yd_index, value);
-                    }
                 }
             }
         }
@@ -260,21 +265,38 @@ void displayio_bitmap_finish_refresh(displayio_bitmap_t *self) {
     self->dirty_area.x2 = 0;
 }
 
-void common_hal_displayio_bitmap_fill(displayio_bitmap_t *self, uint32_t value) {
+void common_hal_displayio_bitmap_fill(
+    displayio_bitmap_t *self, uint32_t value,
+    int16_t x1, int16_t y1, int16_t x2, int16_t y2) {
+
     if (self->read_only) {
         mp_raise_RuntimeError(translate("Read-only"));
     }
-    displayio_area_t a = {0, 0, self->width, self->height, NULL};
+
+    x1 = min(max(x1, 0), self->width);
+    y1 = min(max(y1, 0), self->height);
+    x2 = min(max(x2, x1), self->width);
+    y2 = min(max(y2, y1), self->height);
+
+    displayio_area_t a = {x1, y1, x2, y2, NULL};
     displayio_bitmap_set_dirty_area(self, &a);
 
-    // build the packed word
-    uint32_t word = 0;
-    for (uint8_t i = 0; i < 32 / self->bits_per_value; i++) {
-        word |= (value & self->bitmask) << (32 - ((i + 1) * self->bits_per_value));
-    }
-    // copy it in
-    for (uint32_t i = 0; i < self->stride * self->height; i++) {
-        self->data[i] = word;
+    if (x1 == 0 && y1 == 0 && x2 == self->width && y2 == self->height) {
+        // Fast path for filling the entire bitmap
+        uint32_t word = 0;
+        for (uint8_t i = 0; i < 32 / self->bits_per_value; i++) {
+            word |= (value & self->bitmask) << (32 - ((i + 1) * self->bits_per_value));
+        }
+        // copy it in
+        for (uint32_t i = 0; i < self->stride * self->height; i++) {
+            self->data[i] = word;
+        }
+    } else if (x2 > x1 && y2 > y1) {
+        for (int16_t x = x1; x < x2; x++) {
+            for (int16_t y = y1; y < y2; y++) {
+                displayio_bitmap_write_pixel(self, x, y, value);
+            }
+        }
     }
 }
 
